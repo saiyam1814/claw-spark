@@ -1,0 +1,752 @@
+#!/usr/bin/env bash
+# clawspark - CLI management tool for the clawspark installation.
+# Installed to /usr/local/bin/clawspark by install.sh.
+set -euo pipefail
+
+CLAWSPARK_DIR="${HOME}/.clawspark"
+CLAWSPARK_LOG="${CLAWSPARK_DIR}/install.log"
+CLAWSPARK_DEFAULTS="false"
+
+# ── Source common helpers ───────────────────────────────────────────────────
+_load_common() {
+    local lib_dir="${CLAWSPARK_DIR}/lib"
+    if [[ -f "${lib_dir}/common.sh" ]]; then
+        # shellcheck source=/dev/null
+        source "${lib_dir}/common.sh"
+    else
+        # Minimal fallback if lib is missing
+        RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'
+        BLUE=$'\033[0;34m'; CYAN=$'\033[0;36m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
+        log_info()    { printf '[INFO] %s\n' "$*"; }
+        log_warn()    { printf '[WARN] %s\n' "$*" >&2; }
+        log_error()   { printf '[ERROR] %s\n' "$*" >&2; }
+        log_success() { printf '[OK] %s\n' "$*"; }
+        check_command() { command -v "$1" &>/dev/null; }
+        hr() { printf '%*s\n' "$(tput cols 2>/dev/null || echo 60)" '' | tr ' ' '-'; }
+        print_box() { for l in "$@"; do printf '  %s\n' "$l"; done; }
+    fi
+}
+
+_load_common
+
+# ── Version ─────────────────────────────────────────────────────────────────
+CLAWSPARK_VERSION="1.0.0"
+
+# ── Usage ───────────────────────────────────────────────────────────────────
+_usage() {
+    cat <<USAGE
+${BOLD}clawspark${RESET} v${CLAWSPARK_VERSION} - manage your OpenClaw AI agent
+
+${BOLD}Usage:${RESET}
+  clawspark <command> [options]
+
+${BOLD}Commands:${RESET}
+  ${GREEN}status${RESET}              Show status of all components
+  ${GREEN}skills sync${RESET}         Re-read skills.yaml and install/remove skills
+  ${GREEN}skills add <name>${RESET}   Add a skill and install it
+  ${GREEN}skills remove <name>${RESET} Remove a skill
+  ${GREEN}benchmark${RESET}           Run a performance benchmark
+  ${GREEN}update${RESET}              Update OpenClaw and re-sync skills
+  ${GREEN}dashboard${RESET}           Show dashboard URLs and start ClawMetry if needed
+  ${GREEN}tailscale setup${RESET}    Configure Tailscale remote access
+  ${GREEN}tailscale status${RESET}   Show Tailscale connection status and URLs
+  ${GREEN}airgap on|off${RESET}       Toggle air-gap mode
+  ${GREEN}logs${RESET}                Tail gateway logs
+  ${GREEN}restart${RESET}             Restart Ollama and the gateway
+  ${GREEN}uninstall${RESET}           Remove everything (with confirmation)
+  ${GREEN}help${RESET}                Show this help message
+
+USAGE
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  COMMANDS
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── status ──────────────────────────────────────────────────────────────────
+_cmd_status() {
+    printf '\n%s%s clawspark status%s\n\n' "${BOLD}" "${BLUE}" "${RESET}"
+
+    # Ollama
+    if curl -sf http://127.0.0.1:11434/ &>/dev/null; then
+        printf '  %s✓%s Ollama            running\n' "${GREEN}" "${RESET}"
+    else
+        printf '  %s✗%s Ollama            not running\n' "${RED}" "${RESET}"
+    fi
+
+    # Models
+    if check_command ollama; then
+        local model_count
+        model_count=$(ollama list 2>/dev/null | tail -n +2 | wc -l | tr -d ' ')
+        printf '  %s✓%s Models            %s loaded\n' "${GREEN}" "${RESET}" "${model_count}"
+    else
+        printf '  %s✗%s Models            ollama not found\n' "${RED}" "${RESET}"
+    fi
+
+    # OpenClaw
+    if check_command openclaw; then
+        local oc_ver
+        oc_ver=$(openclaw --version 2>/dev/null || echo "unknown")
+        printf '  %s✓%s OpenClaw          %s\n' "${GREEN}" "${RESET}" "${oc_ver}"
+    else
+        printf '  %s✗%s OpenClaw          not installed\n' "${RED}" "${RESET}"
+    fi
+
+    # Gateway
+    local gw_pid_file="${CLAWSPARK_DIR}/gateway.pid"
+    if [[ -f "${gw_pid_file}" ]]; then
+        local gw_pid
+        gw_pid=$(cat "${gw_pid_file}")
+        if kill -0 "${gw_pid}" 2>/dev/null; then
+            printf '  %s✓%s Gateway           running (PID %s)\n' "${GREEN}" "${RESET}" "${gw_pid}"
+        else
+            printf '  %s✗%s Gateway           not running (stale PID)\n' "${YELLOW}" "${RESET}"
+        fi
+    else
+        printf '  %s-%s Gateway           no PID file\n' "${YELLOW}" "${RESET}"
+    fi
+
+    # Node host
+    local node_pid_file="${CLAWSPARK_DIR}/node.pid"
+    if [[ -f "${node_pid_file}" ]]; then
+        local node_pid
+        node_pid=$(cat "${node_pid_file}")
+        if kill -0 "${node_pid}" 2>/dev/null; then
+            printf '  %s✓%s Node host         running (PID %s)\n' "${GREEN}" "${RESET}" "${node_pid}"
+        else
+            printf '  %s✗%s Node host         not running (stale PID)\n' "${YELLOW}" "${RESET}"
+        fi
+    else
+        printf '  %s-%s Node host         not started\n' "${YELLOW}" "${RESET}"
+    fi
+
+    # Dashboard
+    local dash_pid_file="${CLAWSPARK_DIR}/dashboard.pid"
+    if [[ -f "${dash_pid_file}" ]]; then
+        local dash_pid
+        dash_pid=$(cat "${dash_pid_file}")
+        if kill -0 "${dash_pid}" 2>/dev/null; then
+            printf '  %s✓%s Dashboard         running (PID %s)\n' "${GREEN}" "${RESET}" "${dash_pid}"
+        else
+            printf '  %s✗%s Dashboard         not running (stale PID)\n' "${YELLOW}" "${RESET}"
+        fi
+    elif curl -sf --max-time 2 http://127.0.0.1:8900 &>/dev/null; then
+        printf '  %s✓%s Dashboard         running\n' "${GREEN}" "${RESET}"
+    else
+        printf '  %s-%s Dashboard         not started\n' "${YELLOW}" "${RESET}"
+    fi
+
+    # Skills
+    local skill_count=0
+    if [[ -f "${CLAWSPARK_DIR}/skills.yaml" ]]; then
+        skill_count=$(grep -c '^ *- ' "${CLAWSPARK_DIR}/skills.yaml" 2>/dev/null || echo 0)
+    fi
+    printf '  %s✓%s Skills            %s configured\n' "${GREEN}" "${RESET}" "${skill_count}"
+
+    # Air-gap
+    local ag_state="off"
+    if [[ -f "${CLAWSPARK_DIR}/airgap.state" ]]; then
+        ag_state=$(cat "${CLAWSPARK_DIR}/airgap.state")
+        [[ "${ag_state}" == "true" ]] && ag_state="ON" || ag_state="off"
+    fi
+    printf '  %s-%s Air-gap           %s\n' "${CYAN}" "${RESET}" "${ag_state}"
+
+    # Token
+    if [[ -f "${CLAWSPARK_DIR}/token" ]]; then
+        printf '  %s✓%s Token             present\n' "${GREEN}" "${RESET}"
+    else
+        printf '  %s-%s Token             not generated\n' "${YELLOW}" "${RESET}"
+    fi
+
+    printf '\n'
+}
+
+# ── skills ──────────────────────────────────────────────────────────────────
+_cmd_skills() {
+    local subcmd="${1:-}"
+    shift || true
+
+    case "${subcmd}" in
+        sync)
+            _skills_sync
+            ;;
+        add)
+            local name="${1:-}"
+            [[ -z "${name}" ]] && { log_error "Usage: clawspark skills add <name>"; exit 1; }
+            _skills_add "${name}"
+            ;;
+        remove)
+            local name="${1:-}"
+            [[ -z "${name}" ]] && { log_error "Usage: clawspark skills remove <name>"; exit 1; }
+            _skills_remove "${name}"
+            ;;
+        *)
+            log_error "Unknown skills subcommand: ${subcmd}"
+            printf '  Usage: clawspark skills [sync|add <name>|remove <name>]\n'
+            exit 1
+            ;;
+    esac
+}
+
+_skills_sync() {
+    local skills_file="${CLAWSPARK_DIR}/skills.yaml"
+    if [[ ! -f "${skills_file}" ]]; then
+        log_error "No skills.yaml found at ${skills_file}"
+        exit 1
+    fi
+
+    log_info "Syncing skills from ${skills_file}..."
+
+    # Parse skill names (supports both "- name: slug" and "- slug" formats)
+    local -a skills=()
+    local in_enabled=false
+
+    while IFS= read -r line; do
+        [[ "${line}" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// }" ]] && continue
+
+        if [[ "${line}" =~ enabled:[[:space:]]*$ ]]; then
+            in_enabled=true; continue
+        fi
+        if ${in_enabled} && [[ "${line}" =~ ^[[:space:]]{0,3}[a-zA-Z] ]] && [[ ! "${line}" =~ ^[[:space:]]*- ]]; then
+            in_enabled=false; continue
+        fi
+        if ${in_enabled} && [[ "${line}" =~ ^[[:space:]]*-[[:space:]]+name:[[:space:]]+(.*) ]]; then
+            local slug="${BASH_REMATCH[1]}"; slug="${slug## }"; slug="${slug%% }"
+            skills+=("${slug}"); continue
+        fi
+        if ${in_enabled} && [[ "${line}" =~ ^[[:space:]]*-[[:space:]]+(.*) ]]; then
+            local slug="${BASH_REMATCH[1]}"; slug="${slug## }"; slug="${slug%% }"
+            [[ "${slug}" =~ ^[a-zA-Z]+: ]] && continue
+            skills+=("${slug}")
+        fi
+    done < "${skills_file}"
+
+    log_info "Found ${#skills[@]} skill(s). Installing..."
+    local installed=0 failed=0
+    for skill in "${skills[@]}"; do
+        printf '  %s→%s %s ... ' "${CYAN}" "${RESET}" "${skill}"
+        if npx clawhub@latest install "${skill}" >> "${CLAWSPARK_LOG}" 2>&1; then
+            printf '%s✓%s\n' "${GREEN}" "${RESET}"
+            installed=$(( installed + 1 ))
+        else
+            printf '%s✗%s\n' "${YELLOW}" "${RESET}"
+            failed=$(( failed + 1 ))
+        fi
+    done
+    log_success "Sync complete: ${installed} installed, ${failed} failed."
+}
+
+_skills_add() {
+    local name="$1"
+    local skills_file="${CLAWSPARK_DIR}/skills.yaml"
+
+    # Check if already present
+    if grep -q "name: ${name}" "${skills_file}" 2>/dev/null || \
+       grep -q "^  *- ${name}$" "${skills_file}" 2>/dev/null; then
+        log_info "Skill '${name}' is already in skills.yaml."
+    else
+        # Append under enabled section
+        # Find the last "- name:" line and add after it
+        local tmpfile
+        tmpfile=$(mktemp)
+        awk -v skill="${name}" '
+            /enabled:/ { in_enabled=1 }
+            in_enabled && /^[[:space:]]*custom:/ {
+                printf "    - name: %s\n      description: User-added skill\n", skill
+                in_enabled=0
+            }
+            { print }
+        ' "${skills_file}" > "${tmpfile}"
+        mv "${tmpfile}" "${skills_file}"
+        log_success "Added '${name}' to skills.yaml."
+    fi
+
+    log_info "Installing '${name}'..."
+    if npx clawhub@latest install "${name}" >> "${CLAWSPARK_LOG}" 2>&1; then
+        log_success "Skill '${name}' installed."
+    else
+        log_error "Failed to install '${name}'. Check ${CLAWSPARK_LOG}."
+    fi
+}
+
+_skills_remove() {
+    local name="$1"
+    local skills_file="${CLAWSPARK_DIR}/skills.yaml"
+
+    # Remove from YAML (handles both "- name: slug" multiline and "- slug" single line)
+    local tmpfile
+    tmpfile=$(mktemp)
+    awk -v skill="${name}" '
+        /^[[:space:]]*- name:/ && $0 ~ skill { skip=1; next }
+        skip && /^[[:space:]]+description:/ { skip=0; next }
+        skip { skip=0 }
+        /^[[:space:]]*-[[:space:]]+/ && $0 ~ skill { next }
+        { print }
+    ' "${skills_file}" > "${tmpfile}"
+    mv "${tmpfile}" "${skills_file}"
+
+    log_success "Removed '${name}' from skills.yaml."
+    log_info "Note: The skill package may still be cached locally."
+}
+
+# ── benchmark ───────────────────────────────────────────────────────────────
+_cmd_benchmark() {
+    printf '\n%s%s clawspark benchmark%s\n\n' "${BOLD}" "${BLUE}" "${RESET}"
+
+    if ! curl -sf http://127.0.0.1:11434/ &>/dev/null; then
+        log_error "Ollama is not running. Start it first: clawspark restart"
+        exit 1
+    fi
+
+    # Determine model from config
+    local model_id=""
+    local config_file="${HOME}/.openclaw/openclaw.json"
+    if [[ -f "${config_file}" ]]; then
+        model_id=$(grep -o '"default"[[:space:]]*:[[:space:]]*"[^"]*"' "${config_file}" | head -1 | cut -d'"' -f4)
+    fi
+    if [[ -z "${model_id}" ]]; then
+        model_id=$(ollama list 2>/dev/null | tail -n +2 | head -1 | awk '{print $1}')
+    fi
+    if [[ -z "${model_id}" ]]; then
+        log_error "No model found. Pull one with: ollama pull <model>"
+        exit 1
+    fi
+
+    log_info "Benchmarking model: ${model_id}"
+
+    local prompts=(
+        "Explain quantum computing in one sentence."
+        "Write a haiku about artificial intelligence."
+        "Count from 1 to 20."
+    )
+
+    local total_tokens=0
+    local total_duration_ns=0
+
+    for prompt in "${prompts[@]}"; do
+        printf '  %s→%s "%s" ... ' "${CYAN}" "${RESET}" "${prompt}"
+        local response
+        response=$(curl -sf --max-time 60 http://127.0.0.1:11434/api/generate \
+            -d "{\"model\":\"${model_id}\",\"prompt\":\"${prompt}\",\"stream\":false,\"options\":{\"num_predict\":50}}" 2>/dev/null || echo "")
+
+        if [[ -z "${response}" ]]; then
+            printf '%sfailed%s\n' "${RED}" "${RESET}"
+            continue
+        fi
+
+        local eval_count eval_duration_ns
+        eval_count=$(echo "${response}" | grep -o '"eval_count":[0-9]*' | cut -d: -f2 || echo 0)
+        eval_duration_ns=$(echo "${response}" | grep -o '"eval_duration":[0-9]*' | cut -d: -f2 || echo 0)
+
+        if [[ -n "${eval_count}" && "${eval_count}" -gt 0 && -n "${eval_duration_ns}" && "${eval_duration_ns}" -gt 0 ]]; then
+            local tps
+            tps=$(awk "BEGIN {printf \"%.1f\", ${eval_count} / (${eval_duration_ns} / 1000000000)}")
+            printf '%s%s tok/s%s (%s tokens)\n' "${GREEN}" "${tps}" "${RESET}" "${eval_count}"
+            total_tokens=$(( total_tokens + eval_count ))
+            total_duration_ns=$(( total_duration_ns + eval_duration_ns ))
+        else
+            printf '%sdone%s\n' "${GREEN}" "${RESET}"
+        fi
+    done
+
+    printf '\n'
+    if (( total_duration_ns > 0 )); then
+        local avg_tps
+        avg_tps=$(awk "BEGIN {printf \"%.1f\", ${total_tokens} / (${total_duration_ns} / 1000000000)}")
+        print_box \
+            "${BOLD}Benchmark Results${RESET}" \
+            "" \
+            "Model       : ${model_id}" \
+            "Total tokens: ${total_tokens}" \
+            "Average     : ${CYAN}${avg_tps} tok/s${RESET}"
+    else
+        log_warn "Could not compute benchmark results."
+    fi
+    printf '\n'
+}
+
+# ── update ──────────────────────────────────────────────────────────────────
+_cmd_update() {
+    log_info "Updating OpenClaw..."
+    sudo npm install -g openclaw@latest 2>&1 | tee -a "${CLAWSPARK_LOG}"
+    log_success "OpenClaw updated to $(openclaw --version 2>/dev/null || echo 'latest')."
+
+    # Re-apply patches (npm update overwrites dist files)
+    log_info "Re-applying patches..."
+    local lib_dir="${CLAWSPARK_DIR}/lib"
+    if [[ -f "${lib_dir}/setup-openclaw.sh" ]]; then
+        source "${lib_dir}/setup-openclaw.sh"
+        _patch_sync_full_history
+        _patch_baileys_browser
+        _patch_mention_detection
+    else
+        log_warn "lib/setup-openclaw.sh not found -- patches not re-applied."
+        log_warn "Re-run install.sh to apply patches."
+    fi
+
+    # Re-apply config values that onboard/update may reset
+    log_info "Re-applying config..."
+    openclaw config set tools.profile full >> "${CLAWSPARK_LOG}" 2>&1 || true
+    openclaw config set tools.deny '["exec","write","edit","process","browser","cron","nodes","sessions_spawn"]' >> "${CLAWSPARK_LOG}" 2>&1 || true
+
+    # Restart gateway with correct env
+    log_info "Restarting gateway..."
+    _cmd_restart
+
+    log_info "Syncing skills..."
+    _skills_sync
+}
+
+# ── airgap ──────────────────────────────────────────────────────────────────
+_cmd_airgap() {
+    local mode="${1:-}"
+    local toggle_script="${CLAWSPARK_DIR}/airgap-toggle.sh"
+
+    case "${mode}" in
+        on|off)
+            if [[ -x "${toggle_script}" ]]; then
+                bash "${toggle_script}" "${mode}"
+            else
+                if ! check_command ufw; then
+                    log_error "UFW is not installed. Cannot toggle air-gap."
+                    exit 1
+                fi
+                if [[ "${mode}" == "on" ]]; then
+                    sudo ufw default deny outgoing
+                    sudo ufw allow out to 10.0.0.0/8
+                    sudo ufw allow out to 172.16.0.0/12
+                    sudo ufw allow out to 192.168.0.0/16
+                    sudo ufw allow out to 127.0.0.0/8
+                    sudo ufw allow out 53
+                    echo "true" > "${CLAWSPARK_DIR}/airgap.state"
+                    log_success "Air-gap mode ENABLED."
+                else
+                    sudo ufw default allow outgoing
+                    echo "false" > "${CLAWSPARK_DIR}/airgap.state"
+                    log_success "Air-gap mode DISABLED."
+                fi
+            fi
+            ;;
+        *)
+            local current="off"
+            [[ -f "${CLAWSPARK_DIR}/airgap.state" && "$(cat "${CLAWSPARK_DIR}/airgap.state")" == "true" ]] && current="ON"
+            printf '  Air-gap mode is currently: %s%s%s\n' "${BOLD}" "${current}" "${RESET}"
+            printf '  Usage: clawspark airgap [on|off]\n'
+            ;;
+    esac
+}
+
+# ── dashboard ──────────────────────────────────────────────────────────
+_cmd_dashboard() {
+    printf '\n%s%s clawspark dashboard%s\n\n' "${BOLD}" "${BLUE}" "${RESET}"
+
+    # Check if ClawMetry is running
+    local clawmetry_running=false
+    local clawmetry_pid_file="${CLAWSPARK_DIR}/dashboard.pid"
+
+    if [[ -f "${clawmetry_pid_file}" ]]; then
+        local cm_pid
+        cm_pid=$(cat "${clawmetry_pid_file}")
+        if kill -0 "${cm_pid}" 2>/dev/null; then
+            clawmetry_running=true
+        fi
+    fi
+
+    # Fallback: check via HTTP
+    if ! ${clawmetry_running}; then
+        if curl -sf http://127.0.0.1:8900/ &>/dev/null; then
+            clawmetry_running=true
+        fi
+    fi
+
+    # Start ClawMetry if not running
+    if ! ${clawmetry_running}; then
+        log_info "ClawMetry is not running. Starting it..."
+        if [[ -x "${CLAWSPARK_DIR}/clawmetry/start.sh" ]]; then
+            bash "${CLAWSPARK_DIR}/clawmetry/start.sh" >> "${CLAWSPARK_LOG}" 2>&1
+            log_success "ClawMetry started."
+        elif python3 -m clawmetry --help &>/dev/null; then
+            nohup python3 -m clawmetry --port 8900 --host 127.0.0.1 >> "${CLAWSPARK_DIR}/dashboard.log" 2>&1 &
+            echo $! > "${clawmetry_pid_file}"
+            log_success "ClawMetry started (PID $!)."
+        elif check_command clawmetry; then
+            nohup clawmetry serve >> "${CLAWSPARK_DIR}/dashboard.log" 2>&1 &
+            echo $! > "${clawmetry_pid_file}"
+            log_success "ClawMetry started (PID $!)."
+        else
+            log_warn "ClawMetry is not installed. Metrics dashboard unavailable."
+        fi
+    fi
+
+    printf '  %s%sChat UI:%s  http://localhost:18789/__openclaw__/canvas/\n' "${BOLD}" "${GREEN}" "${RESET}"
+    printf '  %s%sMetrics:%s  http://localhost:8900\n' "${BOLD}" "${GREEN}" "${RESET}"
+
+    # Show Tailscale URLs if connected
+    if check_command tailscale; then
+        local ts_ip
+        ts_ip=$(tailscale ip -4 2>/dev/null || true)
+        if [[ -n "${ts_ip}" ]]; then
+            printf '\n  %s%sTailscale (remote access):%s\n' "${BOLD}" "${CYAN}" "${RESET}"
+            printf '  Chat UI:  http://%s:18789\n' "${ts_ip}"
+            printf '  Metrics:  http://%s:8900\n' "${ts_ip}"
+        fi
+    fi
+
+    printf '\n'
+}
+
+# ── tailscale ──────────────────────────────────────────────────────────
+_cmd_tailscale() {
+    local subcmd="${1:-}"
+    shift || true
+
+    case "${subcmd}" in
+        setup)
+            _tailscale_setup
+            ;;
+        status)
+            _tailscale_status
+            ;;
+        *)
+            printf '  Usage: clawspark tailscale [setup|status]\n'
+            exit 1
+            ;;
+    esac
+}
+
+_tailscale_setup() {
+    printf '\n%s%s clawspark tailscale setup%s\n\n' "${BOLD}" "${BLUE}" "${RESET}"
+
+    # Check if Tailscale is installed
+    if ! check_command tailscale; then
+        log_info "Tailscale is not installed. Installing..."
+        if [[ "$(uname)" == "Linux" ]]; then
+            curl -fsSL https://tailscale.com/install.sh | sh 2>&1 | tee -a "${CLAWSPARK_LOG}"
+        elif [[ "$(uname)" == "Darwin" ]]; then
+            if check_command brew; then
+                brew install --cask tailscale 2>&1 | tee -a "${CLAWSPARK_LOG}"
+            else
+                log_error "Please install Tailscale manually: https://tailscale.com/download"
+                exit 1
+            fi
+        else
+            log_error "Unsupported platform. Please install Tailscale manually: https://tailscale.com/download"
+            exit 1
+        fi
+    fi
+
+    if ! check_command tailscale; then
+        log_error "Tailscale installation failed. Please install manually: https://tailscale.com/download"
+        exit 1
+    fi
+
+    log_info "Starting Tailscale..."
+    sudo tailscale up 2>&1
+
+    # Configure Tailscale to expose the gateway ports
+    local ts_ip
+    ts_ip=$(tailscale ip -4 2>/dev/null || true)
+    if [[ -n "${ts_ip}" ]]; then
+        log_success "Tailscale is connected."
+        printf '\n  Tailscale IP: %s%s%s\n' "${CYAN}" "${ts_ip}" "${RESET}"
+        printf '  Chat UI:     http://%s:18789\n' "${ts_ip}"
+        printf '  Metrics:     http://%s:8900\n' "${ts_ip}"
+        printf '\n'
+        log_info "Make sure your Tailscale ACLs allow access to ports 18789 and 8900."
+    else
+        log_warn "Tailscale is running but no IPv4 address was found. Check 'tailscale status'."
+    fi
+}
+
+_tailscale_status() {
+    printf '\n%s%s clawspark tailscale status%s\n\n' "${BOLD}" "${BLUE}" "${RESET}"
+
+    if ! check_command tailscale; then
+        printf '  %s✗%s Tailscale is not installed.\n' "${RED}" "${RESET}"
+        printf '  Run: clawspark tailscale setup\n\n'
+        return
+    fi
+
+    local ts_status
+    ts_status=$(tailscale status --json 2>/dev/null || true)
+
+    if [[ -z "${ts_status}" ]]; then
+        printf '  %s✗%s Tailscale is not running.\n' "${RED}" "${RESET}"
+        printf '  Run: clawspark tailscale setup\n\n'
+        return
+    fi
+
+    local ts_ip
+    ts_ip=$(tailscale ip -4 2>/dev/null || true)
+
+    if [[ -n "${ts_ip}" ]]; then
+        printf '  %s✓%s Tailscale          connected\n' "${GREEN}" "${RESET}"
+        printf '  %s-%s Tailscale IP       %s\n' "${CYAN}" "${RESET}" "${ts_ip}"
+        printf '  %s-%s Chat UI            http://%s:18789\n' "${CYAN}" "${RESET}" "${ts_ip}"
+        printf '  %s-%s Metrics            http://%s:8900\n' "${CYAN}" "${RESET}" "${ts_ip}"
+    else
+        printf '  %s✗%s Tailscale          not connected\n' "${YELLOW}" "${RESET}"
+        printf '  Run: clawspark tailscale setup\n'
+    fi
+
+    printf '\n'
+}
+
+# ── logs ────────────────────────────────────────────────────────────────────
+_cmd_logs() {
+    local gateway_log="${CLAWSPARK_DIR}/gateway.log"
+    if [[ -f "${gateway_log}" ]]; then
+        tail -f "${gateway_log}"
+    else
+        log_warn "Gateway log not found at ${gateway_log}"
+        log_info "Try: clawspark restart"
+    fi
+}
+
+# ── restart ─────────────────────────────────────────────────────────────────
+_cmd_restart() {
+    log_info "Restarting services..."
+
+    # Restart Ollama
+    if check_command systemctl && systemctl is-enabled ollama &>/dev/null; then
+        sudo systemctl restart ollama
+        log_success "Ollama restarted via systemctl."
+    elif [[ -f "${CLAWSPARK_DIR}/ollama.pid" ]]; then
+        local old_pid
+        old_pid=$(cat "${CLAWSPARK_DIR}/ollama.pid")
+        kill "${old_pid}" 2>/dev/null || true
+        sleep 1
+        nohup ollama serve >> "${CLAWSPARK_DIR}/ollama.log" 2>&1 &
+        echo $! > "${CLAWSPARK_DIR}/ollama.pid"
+        log_success "Ollama restarted (PID $!)."
+    else
+        log_info "Starting Ollama..."
+        nohup ollama serve >> "${CLAWSPARK_DIR}/ollama.log" 2>&1 &
+        echo $! > "${CLAWSPARK_DIR}/ollama.pid"
+        log_success "Ollama started (PID $!)."
+    fi
+
+    # Wait for Ollama API
+    local attempts=0
+    while (( attempts < 15 )); do
+        if curl -sf http://127.0.0.1:11434/ &>/dev/null; then break; fi
+        attempts=$(( attempts + 1 ))
+        sleep 1
+    done
+
+    # Restart gateway
+    local service_file="${HOME}/.config/systemd/user/openclaw-gateway.service"
+    if check_command systemctl && [[ -f "${service_file}" ]]; then
+        # Ensure Ollama env vars are in the systemd service file
+        if ! grep -q 'OLLAMA_API_KEY' "${service_file}" 2>/dev/null; then
+            sed -i '/^Environment=HOME/a Environment=OLLAMA_API_KEY=ollama\nEnvironment=OLLAMA_BASE_URL=http://127.0.0.1:11434' "${service_file}"
+            systemctl --user daemon-reload
+            log_info "Injected Ollama env vars into systemd service."
+        fi
+        systemctl --user restart openclaw-gateway.service
+        log_success "Gateway restarted via systemd."
+    elif check_command openclaw; then
+        # PID-based fallback
+        if [[ -f "${CLAWSPARK_DIR}/gateway.pid" ]]; then
+            local gw_pid
+            gw_pid=$(cat "${CLAWSPARK_DIR}/gateway.pid")
+            kill "${gw_pid}" 2>/dev/null || true
+            sleep 1
+        fi
+        local env_file="${HOME}/.openclaw/gateway.env"
+        [[ -f "${env_file}" ]] && set -a && source "${env_file}" && set +a
+        nohup openclaw gateway run --bind loopback > "${CLAWSPARK_DIR}/gateway.log" 2>&1 &
+        echo $! > "${CLAWSPARK_DIR}/gateway.pid"
+        log_success "Gateway restarted (PID $!)."
+    else
+        log_warn "openclaw not found, gateway not started."
+    fi
+
+    # Restart node host (provides filesystem/read tools)
+    if check_command openclaw; then
+        sleep 2
+        if [[ -f "${CLAWSPARK_DIR}/node.pid" ]]; then
+            kill "$(cat "${CLAWSPARK_DIR}/node.pid")" 2>/dev/null || true
+            sleep 1
+        fi
+        local env_file="${HOME}/.openclaw/gateway.env"
+        [[ -f "${env_file}" ]] && set -a && source "${env_file}" && set +a
+        nohup openclaw node run --host 127.0.0.1 --port 18789 > "${CLAWSPARK_DIR}/node.log" 2>&1 &
+        echo $! > "${CLAWSPARK_DIR}/node.pid"
+        log_success "Node host restarted (PID $!)."
+    fi
+}
+
+# ── uninstall ───────────────────────────────────────────────────────────────
+_cmd_uninstall() {
+    printf '\n%s%s clawspark uninstall%s\n\n' "${BOLD}" "${RED}" "${RESET}"
+    printf '  This will remove OpenClaw, clawspark, and all configuration.\n\n'
+
+    printf '  %sAre you sure? (type YES to confirm):%s ' "${RED}" "${RESET}"
+    local confirm
+    read -r confirm
+    if [[ "${confirm}" != "YES" ]]; then
+        log_info "Uninstall cancelled."
+        exit 0
+    fi
+
+    # Check if the full uninstall.sh exists
+    local uninstall_script="${CLAWSPARK_DIR}/lib/../uninstall.sh"
+    if [[ -f "${uninstall_script}" ]]; then
+        bash "${uninstall_script}" --confirmed
+    else
+        # Inline uninstall
+        _inline_uninstall
+    fi
+}
+
+_inline_uninstall() {
+    # Stop services
+    if [[ -f "${CLAWSPARK_DIR}/gateway.pid" ]]; then
+        kill "$(cat "${CLAWSPARK_DIR}/gateway.pid")" 2>/dev/null || true
+    fi
+    if [[ -f "${CLAWSPARK_DIR}/ollama.pid" ]]; then
+        kill "$(cat "${CLAWSPARK_DIR}/ollama.pid")" 2>/dev/null || true
+    fi
+
+    # Uninstall OpenClaw
+    if check_command openclaw; then
+        npm uninstall -g openclaw 2>/dev/null || true
+        log_info "OpenClaw removed."
+    fi
+
+    # Remove configs
+    rm -rf "${HOME}/.openclaw"
+    rm -rf "${CLAWSPARK_DIR}"
+    sudo rm -f /usr/local/bin/clawspark 2>/dev/null || true
+
+    log_success "clawspark has been fully removed."
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  MAIN DISPATCH
+# ═══════════════════════════════════════════════════════════════════════════
+
+cmd="${1:-help}"
+shift || true
+
+case "${cmd}" in
+    status)     _cmd_status ;;
+    skills)     _cmd_skills "$@" ;;
+    benchmark)  _cmd_benchmark ;;
+    update)     _cmd_update ;;
+    dashboard)  _cmd_dashboard ;;
+    tailscale)  _cmd_tailscale "$@" ;;
+    airgap)     _cmd_airgap "$@" ;;
+    logs)       _cmd_logs ;;
+    restart)    _cmd_restart ;;
+    uninstall)  _cmd_uninstall ;;
+    help|-h|--help) _usage ;;
+    version|--version|-v) echo "clawspark v${CLAWSPARK_VERSION}" ;;
+    *)
+        log_error "Unknown command: ${cmd}"
+        _usage
+        exit 1
+        ;;
+esac

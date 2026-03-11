@@ -1,0 +1,9 @@
+blog/
+*.log
+.env
+node_modules/
+.DS_Store
+*.swp
+*.swo
+*~
+.claude/
