@@ -27,8 +27,9 @@ if [[ -z "${SCRIPT_DIR}" ]] || [[ ! -d "${SCRIPT_DIR}/lib" ]]; then
         curl -fsSL https://github.com/saiyam1814/claw-spark/archive/refs/heads/main.tar.gz \
             | tar xz --strip-components=1 -C "${CLONE_DIR}"
     fi
-    # Re-exec from the cloned repo, passing through all args
-    exec bash "${CLONE_DIR}/install.sh" "$@"
+    # Re-exec from the cloned repo, reconnecting stdin to the terminal
+    # so interactive prompts work (curl pipe leaves stdin at EOF)
+    exec bash "${CLONE_DIR}/install.sh" "$@" </dev/tty
 fi
 
 # ── Parse command-line flags ────────────────────────────────────────────────
