@@ -17,13 +17,23 @@ setup_openclaw() {
         log_success "OpenClaw is already installed (${current_ver})."
     else
         log_info "Installing OpenClaw globally via npm..."
-        (npm install -g openclaw@latest) >> "${CLAWSPARK_LOG}" 2>&1 &
+        (sudo npm install -g openclaw@latest) >> "${CLAWSPARK_LOG}" 2>&1 &
         spinner $! "Installing OpenClaw..."
+        # Refresh shell hash table so check_command finds the new binary
+        hash -r 2>/dev/null || true
         if ! check_command openclaw; then
-            log_error "OpenClaw installation failed. Check ${CLAWSPARK_LOG}."
-            return 1
+            # Fallback: check common global bin locations directly
+            local npm_bin
+            npm_bin="$(npm config get prefix 2>/dev/null)/bin"
+            if [[ -x "${npm_bin}/openclaw" ]]; then
+                export PATH="${npm_bin}:${PATH}"
+                log_info "Added ${npm_bin} to PATH."
+            else
+                log_error "OpenClaw installation failed. Check ${CLAWSPARK_LOG}."
+                return 1
+            fi
         fi
-        log_success "OpenClaw installed."
+        log_success "OpenClaw $(openclaw --version 2>/dev/null || echo '') installed."
     fi
 
     # ── Config directory ────────────────────────────────────────────────────
