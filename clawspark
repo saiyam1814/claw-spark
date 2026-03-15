@@ -229,7 +229,7 @@ _skills_sync() {
     local installed=0 failed=0
     for skill in "${skills[@]}"; do
         printf '  %s→%s %s ... ' "${CYAN}" "${RESET}" "${skill}"
-        if npx clawhub@latest install "${skill}" >> "${CLAWSPARK_LOG}" 2>&1; then
+        if npx --yes clawhub@latest install "${skill}" >> "${CLAWSPARK_LOG}" 2>&1; then
             printf '%s✓%s\n' "${GREEN}" "${RESET}"
             installed=$(( installed + 1 ))
         else
@@ -266,7 +266,7 @@ _skills_add() {
     fi
 
     log_info "Installing '${name}'..."
-    if npx clawhub@latest install "${name}" >> "${CLAWSPARK_LOG}" 2>&1; then
+    if npx --yes clawhub@latest install "${name}" >> "${CLAWSPARK_LOG}" 2>&1; then
         log_success "Skill '${name}' installed."
     else
         log_error "Failed to install '${name}'. Check ${CLAWSPARK_LOG}."
