@@ -168,8 +168,8 @@ _start_gateway() {
         return 0
     fi
 
-    # Start the node host (provides exec/browser/filesystem tools to the agent)
-    _start_node_host
+    # Node host will be started later (after all config changes are done)
+    # to avoid gateway restart (1012) killing it mid-setup.
 }
 
 _start_node_host() {

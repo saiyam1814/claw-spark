@@ -265,6 +265,10 @@ setup_systemd_services || log_warn "Systemd setup had issues -- services will us
 log_info "Step 17/18: Applying security"
 secure_setup
 
+# ── Start node host (after all config changes are done) ───────────────────
+log_info "Starting node host..."
+_start_node_host || log_warn "Node host failed to start -- you can start it with: clawspark start"
+
 # ── Step 18: Verification ──────────────────────────────────────────────────
 log_info "Step 18/18: Verifying installation"
 verify_installation
