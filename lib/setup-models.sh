@@ -43,6 +43,44 @@ setup_models() {
         fi
     fi
 
+    # ── Register vision model with explicit input modality ─────────────────
+    # OpenClaw discovers Ollama models via /v1/models which doesn't report
+    # vision capability. We must explicitly register the model with
+    # input: ["text", "image"] so the image tool works.
+    local config_file="${HOME}/.openclaw/openclaw.json"
+    if [[ -f "${config_file}" ]]; then
+        local vision_model_id="${found_vision:-qwen2.5vl}"
+        # Get the full tag
+        local vision_full_tag
+        vision_full_tag=$(ollama list 2>/dev/null | grep -i "${vision_model_id}" | head -1 | awk '{print $1}')
+        if [[ -n "${vision_full_tag}" ]]; then
+            python3 -c "
+import json, sys
+path = sys.argv[1]
+model_id = sys.argv[2]
+with open(path) as f:
+    cfg = json.load(f)
+cfg.setdefault('models', {}).setdefault('providers', {}).setdefault('ollama', {})
+cfg['models']['providers']['ollama'].setdefault('baseUrl', 'http://127.0.0.1:11434')
+cfg['models']['providers']['ollama']['models'] = [
+    {
+        'id': model_id,
+        'name': model_id.replace(':', ' ').title(),
+        'input': ['text', 'image'],
+        'contextWindow': 32768,
+        'maxTokens': 8192
+    }
+]
+with open(path, 'w') as f:
+    json.dump(cfg, f, indent=2)
+print('ok')
+" "${config_file}" "${vision_full_tag}" 2>> "${CLAWSPARK_LOG}" || {
+                log_warn "Could not register vision model modality."
+            }
+            log_success "Vision model registered with image input capability."
+        fi
+    fi
+
     # ── Image generation model ────────────────────────────────────────────
     # Image generation (text-to-image) is optional and more complex.
     # It typically requires ComfyUI, Stable Diffusion, or an external API.
