@@ -5,17 +5,54 @@
 set -euo pipefail
 
 setup_sandbox() {
-    # Only set up sandbox if Docker is available
+    # Install Docker if not available
     if ! check_command docker; then
-        log_info "Docker not found -- sandbox will not be available."
-        log_info "Install Docker to enable sandboxed code execution."
-        return 0
+        log_info "Docker not found. Installing for sandboxed code execution..."
+        if check_command apt-get; then
+            # Linux: install via official Docker convenience script
+            (curl -fsSL https://get.docker.com | sh) >> "${CLAWSPARK_LOG}" 2>&1 &
+            spinner $! "Installing Docker..."
+            if check_command docker; then
+                # Add current user to docker group so we don't need sudo
+                sudo usermod -aG docker "${USER}" 2>> "${CLAWSPARK_LOG}" || true
+                # Start Docker daemon
+                sudo systemctl start docker 2>> "${CLAWSPARK_LOG}" || true
+                sudo systemctl enable docker 2>> "${CLAWSPARK_LOG}" || true
+                log_success "Docker installed."
+            else
+                log_warn "Docker installation failed -- sandbox will not be available."
+                return 0
+            fi
+        elif check_command brew; then
+            log_info "Installing Docker via Homebrew..."
+            (brew install --cask docker) >> "${CLAWSPARK_LOG}" 2>&1 &
+            spinner $! "Installing Docker..."
+            if [[ -d "/Applications/Docker.app" ]]; then
+                log_success "Docker installed. Open Docker.app to start the daemon."
+                log_warn "Docker daemon not running yet -- sandbox will be available after starting Docker."
+                return 0
+            else
+                log_warn "Docker installation failed -- sandbox will not be available."
+                return 0
+            fi
+        else
+            log_warn "No package manager found -- install Docker manually for sandbox support."
+            return 0
+        fi
     fi
 
     # Check if Docker daemon is running
     if ! docker info &>/dev/null; then
-        log_warn "Docker is installed but not running -- sandbox skipped."
-        return 0
+        # Try to start it
+        if check_command systemctl; then
+            sudo systemctl start docker 2>> "${CLAWSPARK_LOG}" || true
+            sleep 2
+        fi
+        if ! docker info &>/dev/null; then
+            log_warn "Docker is installed but daemon is not running -- sandbox skipped."
+            log_info "Start Docker and run: clawspark sandbox on"
+            return 0
+        fi
     fi
 
     log_info "Setting up Docker sandbox for safe code execution..."

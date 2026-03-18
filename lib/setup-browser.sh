@@ -21,29 +21,30 @@ setup_browser() {
     if [[ -n "${browser_bin}" ]]; then
         log_success "Browser found: ${browser_bin}"
     else
-        log_info "No browser found. The browser tool needs Chromium to work."
+        log_info "No browser found. Installing Chromium for browser automation..."
         if check_command apt-get; then
-            if [[ "${CLAWSPARK_DEFAULTS}" == "true" ]] || prompt_yn "Install Chromium for browser automation?" "y"; then
-                log_info "Installing Chromium..."
-                (sudo apt-get install -y chromium-browser 2>/dev/null || sudo apt-get install -y chromium) >> "${CLAWSPARK_LOG}" 2>&1 &
-                spinner $! "Installing Chromium..."
-                if check_command chromium-browser || check_command chromium; then
-                    browser_bin=$(command -v chromium-browser 2>/dev/null || command -v chromium)
-                    log_success "Chromium installed: ${browser_bin}"
-                else
-                    log_warn "Chromium installation failed. Browser tool will not be available."
-                    return 0
-                fi
+            (sudo apt-get install -y chromium-browser 2>/dev/null || sudo apt-get install -y chromium) >> "${CLAWSPARK_LOG}" 2>&1 &
+            spinner $! "Installing Chromium..."
+            if check_command chromium-browser || check_command chromium; then
+                browser_bin=$(command -v chromium-browser 2>/dev/null || command -v chromium)
+                log_success "Chromium installed: ${browser_bin}"
             else
-                log_info "Browser setup skipped."
+                log_warn "Chromium installation failed. Browser tool will not be available."
                 return 0
             fi
         elif check_command brew; then
-            log_info "Install Chrome or Chromium for browser automation."
-            log_info "  brew install --cask chromium"
-            return 0
+            log_info "Installing Chromium via Homebrew..."
+            (brew install --cask chromium) >> "${CLAWSPARK_LOG}" 2>&1 &
+            spinner $! "Installing Chromium..."
+            if check_command chromium || [[ -d "/Applications/Chromium.app" ]]; then
+                browser_bin=$(command -v chromium 2>/dev/null || echo "/Applications/Chromium.app/Contents/MacOS/Chromium")
+                log_success "Chromium installed: ${browser_bin}"
+            else
+                log_warn "Chromium installation failed. Browser tool will not be available."
+                return 0
+            fi
         else
-            log_info "Install Chromium manually to enable browser automation."
+            log_warn "No package manager found. Install Chromium manually to enable browser automation."
             return 0
         fi
     fi
