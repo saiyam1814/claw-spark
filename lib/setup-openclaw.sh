@@ -67,6 +67,7 @@ setup_openclaw() {
     # Re-apply our config values (onboard may overwrite some)
     openclaw config set agents.defaults.model "ollama/${SELECTED_MODEL_ID}" >> "${CLAWSPARK_LOG}" 2>&1 || true
     openclaw config set agents.defaults.memorySearch.enabled false >> "${CLAWSPARK_LOG}" 2>&1 || true
+    openclaw config set tools.profile full >> "${CLAWSPARK_LOG}" 2>&1 || true
 
     # Sync .gateway-token with the actual token in config (onboard may have changed it)
     local actual_token
