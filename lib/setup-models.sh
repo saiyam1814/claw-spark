@@ -61,7 +61,7 @@ model_id = sys.argv[2]
 with open(path) as f:
     cfg = json.load(f)
 cfg.setdefault('models', {}).setdefault('providers', {}).setdefault('ollama', {})
-cfg['models']['providers']['ollama'].setdefault('baseUrl', 'http://127.0.0.1:11434')
+cfg['models']['providers']['ollama'].setdefault('baseUrl', 'http://127.0.0.1:11434/v1')
 cfg['models']['providers']['ollama']['models'] = [
     {
         'id': model_id,
