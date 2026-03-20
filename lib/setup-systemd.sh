@@ -40,6 +40,15 @@ setup_systemd_services() {
 
     local env_file="${user_home}/.openclaw/gateway.env"
 
+    # Compute a comprehensive PATH for systemd (it starts with minimal PATH)
+    # The env file also has PATH, but belt-and-suspenders is safer here
+    local npm_prefix_bin
+    npm_prefix_bin="$(npm config get prefix 2>/dev/null)/bin"
+    local svc_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    [[ -d "${npm_prefix_bin}" ]] && svc_path="${npm_prefix_bin}:${svc_path}"
+    [[ -d "${user_home}/.npm-global/bin" ]] && svc_path="${user_home}/.npm-global/bin:${svc_path}"
+    [[ -d "/snap/bin" ]] && svc_path="${svc_path}:/snap/bin"
+
     # ── Gateway service ──────────────────────────────────────────────────────
     sudo tee /etc/systemd/system/clawspark-gateway.service > /dev/null <<GWEOF
 [Unit]
@@ -51,6 +60,7 @@ Wants=ollama.service
 Type=simple
 User=${user_name}
 Environment=HOME=${user_home}
+Environment=PATH=${svc_path}
 EnvironmentFile=-${env_file}
 ExecStart=${openclaw_bin} gateway run --bind loopback
 Restart=on-failure
@@ -74,6 +84,7 @@ Requires=clawspark-gateway.service
 Type=simple
 User=${user_name}
 Environment=HOME=${user_home}
+Environment=PATH=${svc_path}
 EnvironmentFile=-${env_file}
 ExecStartPre=/bin/sleep 3
 ExecStart=${openclaw_bin} node run --host 127.0.0.1 --port 18789

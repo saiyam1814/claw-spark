@@ -70,7 +70,7 @@ _setup_whatsapp() {
 
     # Enable WhatsApp channel in config with security + message batching
     openclaw config set channels.whatsapp.enabled true >> "${CLAWSPARK_LOG}" 2>&1 || true
-    openclaw config set channels.whatsapp.debounceMs 5000 >> "${CLAWSPARK_LOG}" 2>&1 || true
+    openclaw config set channels.whatsapp.debounceMs 8000 >> "${CLAWSPARK_LOG}" 2>&1 || true
     openclaw config set channels.whatsapp.groupPolicy disabled >> "${CLAWSPARK_LOG}" 2>&1 || true
 
     # Set allowlist so only the owner can interact (no auto-replies to strangers)

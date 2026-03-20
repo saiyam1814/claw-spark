@@ -203,11 +203,25 @@ _write_openclaw_config() {
     echo "${auth_token}" > "${HOME}/.openclaw/.gateway-token"
     chmod 600 "${HOME}/.openclaw/.gateway-token"
 
-    # Write environment file for the gateway (Ollama provider auth)
+    # Write environment file for the gateway (Ollama provider auth + PATH)
+    # PATH must be computed at install time because systemd EnvironmentFile
+    # does not expand shell variables like $HOME. Without this, systemd
+    # services cannot find curl, npx, mcporter, node, or other tools that
+    # the agent invokes via exec.
     local env_file="${HOME}/.openclaw/gateway.env"
+    local npm_prefix_bin
+    npm_prefix_bin="$(npm config get prefix 2>/dev/null)/bin"
+    local computed_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    # Add npm global bin if it exists and isn't already in standard path
+    [[ -d "${npm_prefix_bin}" ]] && computed_path="${npm_prefix_bin}:${computed_path}"
+    # Add user-local npm bin (used by some npm configs)
+    [[ -d "${HOME}/.npm-global/bin" ]] && computed_path="${HOME}/.npm-global/bin:${computed_path}"
+    # Add snap bin (Ubuntu)
+    [[ -d "/snap/bin" ]] && computed_path="${computed_path}:/snap/bin"
     cat > "${env_file}" <<ENVEOF
 OLLAMA_API_KEY=ollama
 OLLAMA_BASE_URL=http://127.0.0.1:11434
+PATH=${computed_path}
 ENVEOF
     chmod 600 "${env_file}"
 }
@@ -452,6 +466,19 @@ _write_workspace_files() {
     # Clean up stale multi-workspace dirs from older installs
     rm -rf "${HOME}/.openclaw/workspace-personal" "${HOME}/.openclaw/workspace-group" 2>/dev/null || true
 
+    # Create /tmp/openclaw/ -- the ONLY /tmp subdirectory that OpenClaw's
+    # media allowlist permits for sending files via WhatsApp/Telegram.
+    # Without this, the agent can create PNGs but can't send them.
+    mkdir -p /tmp/openclaw
+    mkdir -p "${HOME}/.openclaw/media"
+
+    # Deploy render-diagram.sh helper (single command for diagram rendering)
+    if [[ -f "${CLAWSPARK_LIB_DIR}/render-diagram.sh" ]]; then
+        cp "${CLAWSPARK_LIB_DIR}/render-diagram.sh" "${ws_dir}/render-diagram.sh"
+        chmod +x "${ws_dir}/render-diagram.sh"
+        log_info "Deployed render-diagram.sh helper to workspace"
+    fi
+
     # ── TOOLS.md ──────────────────────────────────────────────────────
     cat > "${ws_dir}/TOOLS.md" <<'TOOLSEOF'
 # TOOLS.md - Tool Reference
@@ -501,15 +528,29 @@ Sub-agents can use all tools except session tools (no recursive spawning).
 
 You have MCP servers available via the `mcporter` CLI. Use exec to call them:
 
-### Mermaid Diagrams (20 types: flowchart, sequence, class, C4, mindmap, gantt, etc.)
-To create a diagram:
-1. Learn the syntax: exec command="mcporter call mermaid.get_diagram_examples diagramType=flowchart"
-2. Write the Mermaid code based on what the user wants
-3. Save it to a .mmd file and render: exec command="npx -y @mermaid-js/mermaid-cli mmdc -i diagram.mmd -o diagram.png"
-4. Send the PNG to the user
+### Diagrams -- ALWAYS render as PNG images, NEVER send text/ASCII
 
-Available diagram types: flowchart, sequenceDiagram, classDiagram, stateDiagram, c4, mindmap,
-timeline, gantt, pie, sankey, xyChart, block, kanban, radar, and more.
+When asked to create ANY diagram, architecture drawing, or flowchart:
+
+Step 1: Use `exec` to run the render-diagram.sh helper (ONE command does everything):
+
+  exec command="echo 'graph TD
+    A[Control Plane] --> B[Worker Node 1]
+    A --> C[Worker Node 2]
+    B --> D[Pod with GPU]
+    C --> E[Pod with GPU]' | ~/workspace/render-diagram.sh my-diagram"
+
+Step 2: The script prints the PNG path (e.g. /tmp/openclaw/my-diagram.png). Send it:
+
+  message mediaPath="/tmp/openclaw/my-diagram.png" body="Here is the diagram"
+
+CRITICAL RULES:
+- ALWAYS use `exec` with render-diagram.sh. NEVER use the `write` tool for diagrams.
+- ALWAYS send the PNG file. NEVER send Mermaid code as text or ASCII art.
+- NEVER tell the user to visit mermaid.live or any website.
+- The PNG MUST be in /tmp/openclaw/ (the only /tmp path WhatsApp allows).
+- Available types: flowchart, sequenceDiagram, classDiagram, stateDiagram, c4,
+  mindmap, timeline, gantt, pie, sankey, xyChart, block, kanban, radar.
 
 ### Memory (persistent knowledge graph)
 Store info: exec command="mcporter call memory.create_entities entities='[{\"name\":\"project\",\"entityType\":\"project\",\"observations\":[\"Uses React\"]}]'"
@@ -517,13 +558,11 @@ Search: exec command="mcporter call memory.search_nodes query='project details'"
 Great for remembering user preferences, project context, and past decisions.
 
 ### Filesystem (14 tools)
-exec command="mcporter call filesystem.read_file path=/home/saiyam/workspace/file.txt"
+exec command="mcporter call filesystem.read_file path=$HOME/workspace/file.txt"
 
 ### Sequential Thinking
 exec command="mcporter call sequentialthinking.sequentialthinking thought='Step 1: ...' nextThoughtNeeded=true thoughtNumber=1 totalThoughts=5"
 
-When asked to create diagrams, architecture drawings, or flowcharts, ALWAYS generate them as
-actual images using Mermaid. Do NOT just describe what a diagram would look like in text.
 
 ## Web Search
 
@@ -677,4 +716,40 @@ SOULEOF
 
     # Make workspace files read-only so agents cannot self-modify
     chmod 444 "${ws_dir}/SOUL.md" "${ws_dir}/TOOLS.md" 2>/dev/null || true
+
+    # ── Deploy to ALL locations OpenClaw reads from ──────────────────────
+    # OpenClaw copies workspace files into sandbox dirs when creating new
+    # sessions. Existing sandboxes keep their OLD copies. We must:
+    # 1. Write to ~/.openclaw/workspace/ (old default some versions use)
+    # 2. Overwrite TOOLS.md/SOUL.md in any existing sandbox dirs
+    # 3. Clear stale sessions so new sessions pick up fresh workspace files
+    # Without this, users have to SSH in and manually fix TOOLS.md -- which
+    # is exactly the kind of bug that makes the install not "one-click".
+
+    local alt_ws="${HOME}/.openclaw/workspace"
+    if [[ -d "${alt_ws}" ]] || [[ ! "${alt_ws}" -ef "${ws_dir}" ]]; then
+        mkdir -p "${alt_ws}"
+        chmod 644 "${alt_ws}/SOUL.md" "${alt_ws}/TOOLS.md" 2>/dev/null || true
+        cp "${ws_dir}/TOOLS.md" "${alt_ws}/TOOLS.md"
+        cp "${ws_dir}/SOUL.md" "${alt_ws}/SOUL.md"
+        [[ -f "${ws_dir}/render-diagram.sh" ]] && cp "${ws_dir}/render-diagram.sh" "${alt_ws}/render-diagram.sh" && chmod +x "${alt_ws}/render-diagram.sh"
+        chmod 444 "${alt_ws}/SOUL.md" "${alt_ws}/TOOLS.md" 2>/dev/null || true
+    fi
+
+    # Overwrite TOOLS.md/SOUL.md + deploy render-diagram.sh in existing sandbox directories
+    local sandbox_dir
+    for sandbox_dir in "${HOME}"/.openclaw/sandboxes/agent-*/; do
+        [[ -d "${sandbox_dir}" ]] || continue
+        chmod 644 "${sandbox_dir}/TOOLS.md" "${sandbox_dir}/SOUL.md" 2>/dev/null || true
+        cp "${ws_dir}/TOOLS.md" "${sandbox_dir}/TOOLS.md" 2>/dev/null || true
+        cp "${ws_dir}/SOUL.md" "${sandbox_dir}/SOUL.md" 2>/dev/null || true
+        [[ -f "${ws_dir}/render-diagram.sh" ]] && cp "${ws_dir}/render-diagram.sh" "${sandbox_dir}/render-diagram.sh" 2>/dev/null && chmod +x "${sandbox_dir}/render-diagram.sh" 2>/dev/null || true
+        chmod 444 "${sandbox_dir}/TOOLS.md" "${sandbox_dir}/SOUL.md" 2>/dev/null || true
+    done
+
+    # Clear stale session data so the agent starts fresh with updated tools
+    rm -f "${HOME}"/.openclaw/agents/main/sessions/*.jsonl 2>/dev/null || true
+    rm -f "${HOME}"/.openclaw/agents/main/sessions.json 2>/dev/null || true
+
+    log_success "Workspace files deployed to all locations (workspace, sandboxes, sessions cleared)"
 }

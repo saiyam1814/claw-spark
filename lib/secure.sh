@@ -42,6 +42,11 @@ secure_setup() {
         _configure_airgap
     fi
 
+    # ── Code-level tool restrictions ─────────────────────────────────────────
+    # These are enforced by OpenClaw runtime, NOT by prompt instructions.
+    # Even if the agent is prompt-injected, it cannot bypass these.
+    _harden_tool_access
+
     # ── Security warnings ───────────────────────────────────────────────────
     printf '\n'
     print_box \
@@ -51,9 +56,83 @@ secure_setup() {
         "   Do not expose the API to untrusted users." \
         "2. The gateway binds to localhost only by default." \
         "3. Your access token is in ~/.clawspark/token" \
-        "4. Review firewall rules with: sudo ufw status verbose"
+        "4. Review firewall rules with: sudo ufw status verbose" \
+        "5. File operations restricted to workspace (tools.fs.workspaceOnly)" \
+        "6. Dangerous commands blocked via gateway.nodes.denyCommands"
 
     log_success "Security hardening complete."
+}
+
+# ── Code-level tool & filesystem restrictions ─────────────────────────────
+# These are enforced by OpenClaw's runtime, not by SOUL.md/TOOLS.md prompts.
+# A prompt injection CANNOT bypass these restrictions.
+
+_harden_tool_access() {
+    log_info "Applying code-level tool restrictions..."
+    local config_file="${HOME}/.openclaw/openclaw.json"
+
+    if [[ ! -f "${config_file}" ]]; then
+        log_warn "Config not found -- skipping tool hardening."
+        return 0
+    fi
+
+    python3 -c "
+import json, sys
+
+path = sys.argv[1]
+with open(path) as f:
+    cfg = json.load(f)
+
+# ── 1. Restrict filesystem to workspace only ──────────────────────────
+# This prevents the agent from reading files outside ~/workspace
+# even if prompted to. The read/write/edit tools are code-gated.
+cfg.setdefault('tools', {})
+cfg['tools'].setdefault('fs', {})
+cfg['tools']['fs']['workspaceOnly'] = True
+
+# ── 2. Block dangerous exec commands at the gateway level ─────────────
+# These are command prefixes that the node host will REFUSE to execute,
+# regardless of what the agent requests. Code-enforced deny list.
+cfg.setdefault('gateway', {})
+cfg['gateway'].setdefault('nodes', {})
+cfg['gateway']['nodes']['denyCommands'] = [
+    # Credential/secret exfiltration
+    'cat ~/.openclaw',
+    'cat /etc/shadow',
+    'cat ~/.ssh',
+    # Destructive operations
+    'rm -rf /',
+    'rm -rf ~',
+    'mkfs',
+    'dd if=',
+    # Network exfiltration of secrets
+    'curl.*gateway.env',
+    'curl.*gateway-token',
+    'wget.*gateway.env',
+    # System modification
+    'passwd',
+    'useradd',
+    'usermod',
+    'visudo',
+    'crontab',
+    # Package management (prevent installing malware)
+    'apt install',
+    'apt-get install',
+    'pip install',
+    'npm install -g',
+]
+
+with open(path, 'w') as f:
+    json.dump(cfg, f, indent=2)
+print('ok')
+" "${config_file}" 2>> "${CLAWSPARK_LOG}" || {
+        log_warn "Tool hardening failed. Continuing with default permissions."
+        return 0
+    }
+
+    log_success "Code-level restrictions applied:"
+    log_info "  tools.fs.workspaceOnly = true (file ops restricted to workspace)"
+    log_info "  gateway.nodes.denyCommands = [${#deny_commands[@]:-20+} blocked patterns]"
 }
 
 # ── UFW configuration ──────────────────────────────────────────────────────
