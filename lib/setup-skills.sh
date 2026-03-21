@@ -84,6 +84,9 @@ setup_skills() {
 
     log_info "Found ${#skills[@]} skill(s) to install."
 
+    # ── Fix npm cache permissions (root-owned ~/.npm from sudo npm) ─────────
+    _fix_npm_cache_perms
+
     # ── Install each skill ──────────────────────────────────────────────────
     local installed=0
     local failed=0
@@ -131,4 +134,20 @@ _install_community_skills() {
         fi
     done
     log_success "Community skills installed (web search, deep research)."
+}
+
+# ── Fix root-owned npm cache (common after sudo npm install -g) ───────────
+_fix_npm_cache_perms() {
+    local npm_cache="${HOME}/.npm"
+    if [[ -d "${npm_cache}" ]]; then
+        # Check if any files are owned by root (uid 0)
+        local root_files
+        root_files=$(find "${npm_cache}" -maxdepth 2 -uid 0 2>/dev/null | head -1)
+        if [[ -n "${root_files}" ]]; then
+            log_info "Fixing npm cache permissions (root-owned files in ~/.npm)..."
+            sudo chown -R "$(id -u):$(id -g)" "${npm_cache}" 2>/dev/null || {
+                log_warn "Could not fix ~/.npm permissions. Skills may fail to install."
+            }
+        fi
+    fi
 }

@@ -302,8 +302,9 @@ _find_openclaw_dir() {
         fi
     fi
 
-    # Try common global node_modules paths
+    # Try common global node_modules paths (including Homebrew on macOS)
     for candidate in \
+        "/opt/homebrew/lib/node_modules/openclaw" \
         "/usr/lib/node_modules/openclaw" \
         "/usr/local/lib/node_modules/openclaw" \
         "${HOME}/.npm-global/lib/node_modules/openclaw" \
@@ -324,11 +325,17 @@ _patch_sync_full_history() {
         return 0
     fi
 
+    # Use sudo if the dist files are not writable (e.g. Homebrew global npm)
+    local _py="python3"
+    if [[ -d "${oc_dir}/dist" ]] && ! test -w "${oc_dir}/dist" 2>/dev/null; then
+        _py="sudo python3"
+    fi
+
     local patched=0
     while IFS= read -r -d '' session_file; do
         if grep -q 'syncFullHistory: false' "${session_file}" 2>/dev/null; then
             local patch_result
-            patch_result=$(python3 -c "
+            patch_result=$(${_py} -c "
 import sys
 path = sys.argv[1]
 with open(path, 'r') as f:
@@ -361,6 +368,12 @@ _patch_baileys_browser() {
         return 0
     fi
 
+    # Use sudo if the dist files are not writable (e.g. Homebrew global npm)
+    local _py="python3"
+    if [[ -d "${oc_dir}/dist" ]] && ! test -w "${oc_dir}/dist" 2>/dev/null; then
+        _py="sudo python3"
+    fi
+
     local patched=0
     local old_browser
     old_browser=$(printf 'browser: [\n\t\t\t"openclaw",\n\t\t\t"cli",\n\t\t\tVERSION\n\t\t]')
@@ -369,7 +382,7 @@ _patch_baileys_browser() {
     while IFS= read -r -d '' session_file; do
         if grep -q '"openclaw"' "${session_file}" 2>/dev/null; then
             local patch_result
-            patch_result=$(python3 -c "
+            patch_result=$(${_py} -c "
 import sys
 path = sys.argv[1]
 with open(path, 'r') as f:
@@ -404,6 +417,12 @@ _patch_mention_detection() {
         return 0
     fi
 
+    # Use sudo if the dist files are not writable (e.g. Homebrew global npm)
+    local _py="python3"
+    if [[ -d "${oc_dir}/dist" ]] && ! test -w "${oc_dir}/dist" 2>/dev/null; then
+        _py="sudo python3"
+    fi
+
     local patched=0
     while IFS= read -r -d '' channel_file; do
         if grep -q 'return false;' "${channel_file}" 2>/dev/null; then
@@ -412,7 +431,7 @@ _patch_mention_detection() {
             # but don't match selfJid (e.g. WhatsApp resolves @saiyamclaw to a
             # bot JID that doesn't match the linked phone's JID).
             local patch_result
-            patch_result=$(python3 -c "
+            patch_result=$(${_py} -c "
 import sys
 path = sys.argv[1]
 with open(path, 'r') as f:

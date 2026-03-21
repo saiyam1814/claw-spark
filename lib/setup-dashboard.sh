@@ -147,41 +147,80 @@ _start_dashboard() {
 
     log_info "Starting ClawMetry dashboard..."
 
-    # clawmetry doesn't have __main__.py, so python3 -m clawmetry won't work.
     # Try multiple launch methods in order of preference.
-    local launch_cmd=""
-
-    # Method 1: clawmetry CLI entry point (may be in ~/.local/bin from --user install)
-    if command -v clawmetry &>/dev/null; then
-        launch_cmd="clawmetry --port 8900 --host 127.0.0.1"
-    elif [[ -x "${HOME}/.local/bin/clawmetry" ]]; then
-        launch_cmd="${HOME}/.local/bin/clawmetry --port 8900 --host 127.0.0.1"
-    else
-        # Method 2: use waitress to serve the Flask app directly
-        launch_cmd="python3 -c \"from clawmetry import create_app; from waitress import serve; serve(create_app(), host='127.0.0.1', port=8900)\""
+    # The pip --user install puts the CLI in ~/.local/bin (or ~/Library/Python/*/bin
+    # on macOS) which may not be on PATH.
+    local -a cli_paths=(
+        "$(command -v clawmetry 2>/dev/null || true)"
+        "${HOME}/.local/bin/clawmetry"
+    )
+    # macOS: pip --user installs to ~/Library/Python/X.Y/bin/
+    local _pyver
+    _pyver=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "")
+    if [[ -n "${_pyver}" ]]; then
+        cli_paths+=("${HOME}/Library/Python/${_pyver}/bin/clawmetry")
     fi
 
-    nohup bash -c "${launch_cmd}" > "${dashboard_log}" 2>&1 &
-    local dash_pid=$!
-    echo "${dash_pid}" > "${dashboard_pid_file}"
+    local dash_pid=""
+    local started=false
 
-    sleep 2
-    if kill -0 "${dash_pid}" 2>/dev/null; then
-        log_success "ClawMetry running (PID ${dash_pid}). Logs: ${dashboard_log}"
-    else
-        log_warn "ClawMetry process exited unexpectedly. Check ${dashboard_log}."
-        # Method 3: last resort -- try flask dev server
+    # Method 1: CLI entry point
+    for _cp in "${cli_paths[@]}"; do
+        [[ -z "${_cp}" ]] && continue
+        [[ -x "${_cp}" ]] || continue
+        nohup "${_cp}" --port 8900 --host 127.0.0.1 > "${dashboard_log}" 2>&1 &
+        dash_pid=$!
+        echo "${dash_pid}" > "${dashboard_pid_file}"
+        sleep 2
+        if kill -0 "${dash_pid}" 2>/dev/null; then
+            log_success "ClawMetry running (PID ${dash_pid}). Logs: ${dashboard_log}"
+            started=true
+            break
+        fi
+    done
+
+    # Method 2: python3 -m clawmetry
+    if [[ "${started}" != "true" ]]; then
+        log_info "Trying python3 -m clawmetry..."
+        nohup python3 -m clawmetry --port 8900 --host 127.0.0.1 > "${dashboard_log}" 2>&1 &
+        dash_pid=$!
+        echo "${dash_pid}" > "${dashboard_pid_file}"
+        sleep 2
+        if kill -0 "${dash_pid}" 2>/dev/null; then
+            log_success "ClawMetry running (PID ${dash_pid}). Logs: ${dashboard_log}"
+            started=true
+        fi
+    fi
+
+    # Method 3: try various Flask app import paths
+    if [[ "${started}" != "true" ]]; then
         log_info "Trying alternative launch method..."
         nohup python3 -c "
-from clawmetry import create_app
-app = create_app()
-app.run(host='127.0.0.1', port=8900)
+import sys
+# Try multiple known entry points
+for factory in ['create_app', 'app', 'make_app']:
+    try:
+        mod = __import__('clawmetry')
+        fn = getattr(mod, factory, None)
+        if callable(fn):
+            app = fn() if factory != 'app' else fn
+            try:
+                from waitress import serve
+                serve(app, host='127.0.0.1', port=8900)
+            except ImportError:
+                app.run(host='127.0.0.1', port=8900)
+            sys.exit(0)
+    except Exception:
+        continue
+print('No working entry point found in clawmetry', file=sys.stderr)
+sys.exit(1)
 " > "${dashboard_log}" 2>&1 &
         dash_pid=$!
         echo "${dash_pid}" > "${dashboard_pid_file}"
         sleep 2
         if kill -0 "${dash_pid}" 2>/dev/null; then
-            log_success "ClawMetry running via Flask dev server (PID ${dash_pid})."
+            log_success "ClawMetry running via fallback (PID ${dash_pid})."
+            started=true
         else
             log_warn "All ClawMetry launch methods failed. Check ${dashboard_log}."
         fi

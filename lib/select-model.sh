@@ -319,7 +319,9 @@ PATTERNS = [
     # DeepSeek
     (r'(?i)deepseek.*r1.*(\d+)b',   'deepseek-r1:{size}b'),
     (r'(?i)deepseek.*v3',           'deepseek-v3'),
-    (r'(?i)deepseek.*v2.*(\d+)b',   'deepseek-v2:{size}b'),
+    (r'(?i)deepseek.*v2.*lite',     'deepseek-v2:lite'),
+    (r'(?i)deepseek.*v2.*16b',      'deepseek-v2:16b'),
+    (r'(?i)deepseek.*v2',           'deepseek-v2'),
     # NVIDIA
     (r'(?i)nemotron.*nano',          'nemotron-3-nano'),
     (r'(?i)nemotron.*mini.*(\d+)b',  'nemotron-mini:{size}b'),

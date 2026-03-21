@@ -28,8 +28,17 @@ if [[ -z "${SCRIPT_DIR}" ]] || [[ ! -d "${SCRIPT_DIR}/lib" ]]; then
             | tar xz --strip-components=1 -C "${CLONE_DIR}"
     fi
     # Re-exec from the cloned repo, reconnecting stdin to the terminal
-    # so interactive prompts work (curl pipe leaves stdin at EOF)
-    exec bash "${CLONE_DIR}/install.sh" "$@" </dev/tty
+    # so interactive prompts work (curl pipe leaves stdin at EOF).
+    # Prefer Homebrew bash on macOS (system bash is 3.2, too old).
+    _REEXEC_BASH="bash"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        if [[ -x /opt/homebrew/bin/bash ]]; then
+            _REEXEC_BASH=/opt/homebrew/bin/bash
+        elif [[ -x /usr/local/bin/bash ]]; then
+            _REEXEC_BASH=/usr/local/bin/bash
+        fi
+    fi
+    exec "${_REEXEC_BASH}" "${CLONE_DIR}/install.sh" "$@" </dev/tty
 fi
 
 # ── Parse command-line flags ────────────────────────────────────────────────
@@ -72,6 +81,26 @@ HELP
 done
 
 export CLAWSPARK_DEFAULTS AIR_GAP FLAG_MODEL FLAG_MESSAGING DEPLOY_MODE
+
+# ── Require bash 4.2+ (macOS ships 3.2 which lacks nameref, ${var,,}, etc.) ─
+if [[ "${BASH_VERSINFO[0]}" -lt 4 ]] || { [[ "${BASH_VERSINFO[0]}" -eq 4 ]] && [[ "${BASH_VERSINFO[1]}" -lt 2 ]]; }; then
+    echo ""
+    echo "ERROR: Bash 4.2+ is required (you have ${BASH_VERSION})."
+    echo ""
+    if [[ "$(uname)" == "Darwin" ]]; then
+        echo "macOS ships with bash 3.2. Install modern bash with Homebrew:"
+        echo ""
+        echo "  brew install bash"
+        echo ""
+        echo "Then re-run the installer with:"
+        echo ""
+        echo "  /opt/homebrew/bin/bash <(curl -fsSL https://clawspark.dev/install.sh)"
+        echo ""
+    else
+        echo "Please install bash 4.2+ and re-run the installer."
+    fi
+    exit 1
+fi
 
 # ── Prepare clawspark directory ─────────────────────────────────────────────
 CLAWSPARK_DIR="${HOME}/.clawspark"

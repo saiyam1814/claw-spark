@@ -35,7 +35,17 @@ setup_models() {
         log_info "No vision model found. Pulling ${vision_choice} for image analysis (~5GB)..."
         (ollama pull "${vision_choice}") >> "${CLAWSPARK_LOG}" 2>&1 &
         spinner $! "Pulling ${vision_choice}..."
-        if ollama list 2>/dev/null | grep -qi "qwen2.5vl"; then
+        # Wait a moment for Ollama to index the model, then check with retries
+        local _vision_ok=false
+        local _retry
+        for _retry in 1 2 3; do
+            if ollama list 2>/dev/null | grep -qi "qwen2.5vl"; then
+                _vision_ok=true
+                break
+            fi
+            sleep 2
+        done
+        if [[ "${_vision_ok}" == "true" ]]; then
             openclaw config set agents.defaults.imageModel "ollama/${vision_choice}" >> "${CLAWSPARK_LOG}" 2>&1 || true
             log_success "Vision model configured: ollama/${vision_choice}"
         else
