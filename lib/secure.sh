@@ -61,7 +61,8 @@ secure_setup() {
         "3. Your access token is in ~/.clawspark/token" \
         "4. Review firewall rules with: sudo ufw status verbose" \
         "5. File operations restricted to workspace (tools.fs.workspaceOnly)" \
-        "6. Dangerous commands blocked via gateway.nodes.denyCommands"
+        "6. Dangerous commands blocked via gateway.nodes.denyCommands" \
+        "7. Plugin approval hooks enabled (plugins.requireApproval)"
 
     log_success "Security hardening complete."
 }
@@ -93,7 +94,14 @@ cfg.setdefault('tools', {})
 cfg['tools'].setdefault('fs', {})
 cfg['tools']['fs']['workspaceOnly'] = True
 
-# ── 2. Block dangerous exec commands at the gateway level ─────────────
+# ── 2. Enable plugin approval hooks (v2026.3.22+) ────────────────────
+# Plugins can pause tool execution and prompt for user confirmation
+# via messaging channels. This prevents rogue plugins from acting
+# without explicit approval.
+cfg.setdefault('plugins', {})
+cfg['plugins']['requireApproval'] = True
+
+# ── 3. Block dangerous exec commands at the gateway level ─────────────
 # These are command prefixes that the node host will REFUSE to execute,
 # regardless of what the agent requests. Code-enforced deny list.
 cfg.setdefault('gateway', {})
@@ -135,6 +143,7 @@ print('ok')
 
     log_success "Code-level restrictions applied:"
     log_info "  tools.fs.workspaceOnly = true (file ops restricted to workspace)"
+    log_info "  plugins.requireApproval = true (plugins need user confirmation)"
     log_info "  gateway.nodes.denyCommands = [21 blocked patterns]"
 }
 

@@ -88,7 +88,7 @@ clawspark configures OpenClaw with the full tool suite. Your agent can:
 | Capability | How it Works |
 |---|---|
 | **Answer questions** | Local LLM via Ollama, no cloud needed |
-| **Search the web** | DuckDuckGo via web_fetch, no API key needed |
+| **Search the web** | Built-in web search + DuckDuckGo fallback, no API key needed |
 | **Deep research** | Sub-agents run parallel research threads |
 | **Browse websites** | Headless Chromium automation (navigate, click, fill forms, screenshot) |
 | **Analyze images** | Vision model (qwen2.5-vl or similar) for screenshots, photos, diagrams |
@@ -191,8 +191,10 @@ clawspark takes security seriously because your AI agent has access to your data
 - Context-aware tool restrictions (full tools in DMs, Q&A only in groups)
 - SOUL.md + TOOLS.md with absolute rules (no credential disclosure, no self-modification)
 - Workspace files set to read-only (chmod 444)
+- Plugin approval hooks (plugins must get user confirmation before acting)
 - Optional Docker sandbox for code execution isolation
 - Air-gap mode for complete network isolation: `clawspark airgap on`
+- OpenAI-compatible API gateway (use your local AI as a drop-in OpenAI replacement)
 
 ## Service Management
 

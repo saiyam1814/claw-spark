@@ -109,6 +109,9 @@ print(c.get('gateway',{}).get('auth',{}).get('token',''))
     # OpenClaw's mention detection has a `return false` early exit when JID
     # mentions exist but don't match selfJid. This prevents text-pattern
     # fallback (e.g. @saiyamclaw), so group @mentions never trigger the bot.
+    # NOTE: v2026.3.28 added upstream fix (selfLid from creds.json) which may
+    # make this patch unnecessary. The patch is safe to apply -- if the old
+    # pattern isn't found, it skips gracefully.
     _patch_mention_detection
 
     # ── Ensure Ollama auth env vars are in shell profile ──────────────────
@@ -232,6 +235,7 @@ _write_openclaw_config() {
     cat > "${env_file}" <<ENVEOF
 OLLAMA_API_KEY=ollama
 OLLAMA_BASE_URL=http://127.0.0.1:11434
+OPENCLAW_GATEWAY_OPENAI_COMPAT=true
 PATH=${computed_path}
 ${cuda_ld_path}
 ENVEOF
@@ -270,6 +274,17 @@ cfg.pop('logging', None)
 # browser.mode is not a valid root-level key; clean up the whole browser block if invalid
 if 'browser' in cfg and 'mode' in cfg.get('browser', {}):
     del cfg['browser']
+# v2026.3.22+: legacy Chrome extension relay removed
+if 'browser' in cfg:
+    cfg['browser'].pop('relayBindHost', None)
+    if 'driver' in cfg.get('browser', {}) and cfg['browser']['driver'] == 'extension':
+        del cfg['browser']['driver']
+    if not cfg['browser']:
+        del cfg['browser']
+# v2026.3.22+: old env var prefixes removed (CLAWDBOT_*, MOLTBOT_*)
+# Nothing to do in config -- just ensure we only use OPENCLAW_* in gateway.env
+# v2026.3.22+: nano-banana-pro image skill removed; use agents.defaults.imageGenerationModel
+cfg.pop('imageGeneration', None)
 # Remove sandbox from agents.defaults (breaks network when network:none is set)
 if 'agents' in cfg and 'defaults' in cfg.get('agents', {}):
     cfg['agents']['defaults'].pop('sandbox', None)
@@ -597,17 +612,24 @@ exec command="mcporter call sequentialthinking.sequentialthinking thought='Step 
 
 ## Web Search
 
-Web search works via web_fetch + DuckDuckGo (no API key needed). Use this pattern:
+You have TWO web search methods. Use the bundled tool first, fall back to DDG if needed.
 
+### Method 1: Bundled web_search tool (preferred)
+web_search query="your search query"
+
+This uses the built-in web search provider (works out of the box). Use this for most searches.
+
+### Method 2: DuckDuckGo via web_fetch (fallback, no API key needed)
 Step 1: web_fetch url="https://lite.duckduckgo.com/lite/?q=YOUR+QUERY" extractMode="text" maxChars=8000
 Step 2: Pick the best 1-2 result URLs from the DDG output
 Step 3: web_fetch on those URLs with extractMode="text" maxChars=15000
 Step 4: Compose your answer from the fetched content
 
-Rules:
-- Replace spaces with + in search queries
+Replace spaces with + in DDG search queries.
+
+### Rules for ALL web search:
 - NEVER announce that you are searching. Just do it silently and return the answer.
-- If a fetch fails, try the next result URL. Do not tell the user about failures.
+- If a search or fetch fails, try the other method silently. Do not tell the user about failures.
 - For Kubernetes docs, fetch https://kubernetes.io/docs/ paths directly
 
 ## Browser Automation
