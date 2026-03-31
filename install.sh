@@ -6,7 +6,7 @@
 #   curl -fsSL https://clawspark.dev/install.sh | bash
 #
 # Or clone and run:
-#   git clone https://github.com/saiyam1814/claw-spark && cd claw-spark && bash install.sh
+#   git clone https://github.com/theshiphq/claw-spark && cd claw-spark && bash install.sh
 set -euo pipefail
 
 # ── Bootstrap: if piped from curl, clone the repo and re-exec ─────────────
@@ -20,11 +20,11 @@ if [[ -z "${SCRIPT_DIR}" ]] || [[ ! -d "${SCRIPT_DIR}/lib" ]]; then
     CLONE_DIR="$(mktemp -d)/claw-spark"
     echo "Downloading clawspark..."
     if command -v git &>/dev/null; then
-        git clone --depth 1 https://github.com/saiyam1814/claw-spark.git "${CLONE_DIR}" 2>/dev/null
+        git clone --depth 1 https://github.com/theshiphq/claw-spark.git "${CLONE_DIR}" 2>/dev/null
     else
         # Fallback: download tarball if git is not available
         mkdir -p "${CLONE_DIR}"
-        curl -fsSL https://github.com/saiyam1814/claw-spark/archive/refs/heads/main.tar.gz \
+        curl -fsSL https://github.com/theshiphq/claw-spark/archive/refs/heads/main.tar.gz \
             | tar xz --strip-components=1 -C "${CLONE_DIR}"
     fi
     # Re-exec from the cloned repo, reconnecting stdin to the terminal
@@ -159,7 +159,7 @@ _on_error() {
     log_error "Installation failed at line ${line_no} (exit code ${exit_code})."
     log_error "Check the log for details: ${CLAWSPARK_LOG}"
     printf '\n  %sIf this looks like a bug, please open an issue at:%s\n' "${YELLOW}" "${RESET}"
-    printf '  https://github.com/saiyam1814/claw-spark/issues\n\n'
+    printf '  https://github.com/theshiphq/claw-spark/issues\n\n'
     exit "${exit_code}"
 }
 trap '_on_error ${LINENO}' ERR

@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/install.sh",
-      "destination": "https://raw.githubusercontent.com/saiyam1814/claw-spark/main/install.sh"
+      "destination": "https://raw.githubusercontent.com/theshiphq/claw-spark/main/install.sh"
     }
   ]
 }
