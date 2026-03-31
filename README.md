@@ -300,6 +300,11 @@ The test runner auto-installs bats if needed. Tests are organized into:
 - `tests/security.bats` -- Token generation, permissions, deny lists (11 tests)
 - `tests/cli.bats` -- Version, help, command routing, error handling (19 tests)
 
+## Maintainers
+
+- **[Saiyam Pathak](https://github.com/saiyam1814)**
+- **[Rohit Ghumare](https://github.com/rohitg00)**
+
 ## Contributing
 
 PRs welcome. The main areas where help is needed:
